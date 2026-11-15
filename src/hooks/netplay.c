@@ -40,6 +40,7 @@
 #include "recomp/gen/recomp_types.h"
 #include "netplay.h"
 #include "netplay_net.h"
+#include "netplay_lobby.h"
 
 #define FRAME_QUEUE_PTR   0x003A017Cu   /* the frame queue object */
 #define STAGING           0x17D0u       /* staged record inside it */
@@ -124,17 +125,36 @@ int netplay_start(void)
     e = getenv("RECOMP_NETPLAY_NAME");
     snprintf(cfg.name, sizeof cfg.name, "%s", e && *e ? e : (s_mode == NP_ROLE_HOST ? "Host" : "Player"));
 #ifdef DEFJAM_VERSION
-    snprintf(cfg.content_id, sizeof cfg.content_id, "djffny-netplay-2/%s", DEFJAM_VERSION);
+    snprintf(cfg.content_id, sizeof cfg.content_id, "djffny-netplay-3/%s", DEFJAM_VERSION);
 #else
-    snprintf(cfg.content_id, sizeof cfg.content_id, "djffny-netplay-2/dev");
+    snprintf(cfg.content_id, sizeof cfg.content_id, "djffny-netplay-3/dev");
 #endif
     if (s_mode == NP_ROLE_CLIENT && !cfg.address[0]) {
         fprintf(stderr, "[NETPLAY] RECOMP_NETPLAY=join needs RECOMP_NETPLAY_ADDR (the host's IP)\n");
         s_dead = 1;
         return -1;
     }
+    /* Everyone's profiles into one save area for the session (netplay_lobby.h), unless
+     * RECOMP_NETPLAY_SHARE_PROFILES=0. main.c then points the save area at that copy. */
+    e = getenv("RECOMP_NETPLAY_SHARE_PROFILES");
+    if (!e || *e != '0') {
+        const char *data = getenv("DEFJAM_DATA");
+        char mine[1024], session_save[1024], session_user[1024];
+        snprintf(mine, sizeof mine, "%s/save/UserData/45410049", data && *data ? data : ".");
+        snprintf(session_save, sizeof session_save, "%s/netplay/save", data && *data ? data : ".");
+        snprintf(session_user, sizeof session_user, "%s/UserData/45410049", session_save);
+        np_say("Netplay: %s", s_mode == NP_ROLE_HOST ? "hospedando" : "uniendose");
+        if (np_lobby_run(s_mode == NP_ROLE_HOST, cfg.address, cfg.port, cfg.players, cfg.content_id,
+                         cfg.name, mine, session_user)) {
+            np_say("No se pudo armar la partida: %s", np_lobby_error());
+            np_say("El juego sigue sin netplay.");
+            s_dead = 1;
+            return -1;
+        }
+        _putenv_s("RECOMP_NETPLAY_SAVE_DIR", session_save);
+    }
     if (np_start(&cfg)) {
-        fprintf(stderr, "[NETPLAY] could not start: %s\n", np_status());
+        np_say("No se pudo iniciar el netplay: %s", np_status());
         s_dead = 1;
         return -1;
     }
@@ -213,8 +233,7 @@ static void begin_session(void)
     int r;
     uint32_t f;
     uint8_t absent[BLOB_BYTES];
-    fprintf(stderr, "[NETPLAY] waiting for the session to start...\n");
-    fflush(stderr);
+    np_say("Arrancando la sesion...");
     while ((r = np_wait_session(1000, &s_session)) == 0) {
         snprintf(s_banner, sizeof s_banner, "Netplay: %s", np_status());
         fflush(stderr);
@@ -231,8 +250,7 @@ static void begin_session(void)
     s_started = 1;
     snprintf(s_banner, sizeof s_banner, "Netplay: player %d of %d, delay %d",
              s_session.player + 1, s_session.players, s_session.delay);
-    fprintf(stderr, "[NETPLAY] %s, seed %08X\n", s_banner, s_session.seed);
-    fflush(stderr);
+    np_say("%s. A jugar! (semilla %08X)", s_banner, s_session.seed);
 }
 
 /* sub_000D75E0 said "run an update" and has just staged its record. */
@@ -263,7 +281,7 @@ void netplay_step_gate(uint32_t queue)
         }
     }
     if (r < 0) {
-        fprintf(stderr, "[NETPLAY] session over at update %u: %s\n", s_frame, np_status());
+        np_say("Se acabo la sesion: %s", np_status());
         snprintf(s_banner, sizeof s_banner, "Netplay ended: %s", np_status());
         fflush(stderr);
         s_dead = 1;

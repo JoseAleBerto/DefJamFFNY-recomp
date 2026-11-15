@@ -782,7 +782,11 @@ static int host_main(void)
         xbox_host_char user_data[MAX_PATH];
         char user_data_utf8[1024];
 
-        if (data && *data) {
+        const char *netplay_save = getenv("RECOMP_NETPLAY_SAVE_DIR");   /* src/hooks/netplay.c */
+        if (netplay_save && *netplay_save) {
+            snprintf(save, sizeof(save), "%s", netplay_save);
+            xbox_path_init(YOUR_GAME_DIR, save);
+        } else if (data && *data) {
             snprintf(save, sizeof(save), "%s%ssave", data,
                      data[strlen(data) - 1] == HOST_SEP_CHAR ? "" : HOST_SEP);
             xbox_path_init(YOUR_GAME_DIR, save);
