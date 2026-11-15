@@ -39,6 +39,7 @@
 #include "test_observations.h"
 #include "input_latency.h"
 #include "input_consumption.h"
+#include "netplay.h"
 #ifdef XBOXRECOMP_HAVE_SDL3
 #include <SDL3/SDL.h>
 #include "input_host.h"
@@ -400,6 +401,10 @@ void defjam_test_rng(uint32_t stack)
     const char *want;
     uint32_t seed, increment;
     int forced = 0;
+    if (netplay_on()) {                 /* netplay: seed and increment from the session (the increment is odd) */
+        MEM32(stack + 4) = netplay_seed();
+        MEM32(stack + 8) = netplay_seed() | 1u;
+    }
     if (!defjam_test_observations_enabled()) return;
     seed = MEM32(stack + 4);
     increment = MEM32(stack + 8);
@@ -675,6 +680,7 @@ void defjam_test_ai_seed(uint32_t stack)
     const char *want;
     uint32_t seed;
     int forced = 0;
+    if (netplay_on()) MEM32(stack + 4) = netplay_seed();     /* netplay: the four AI generators */
     if (!defjam_test_observations_enabled()) return;
     seed = MEM32(stack + 4);
     want = getenv("RECOMP_TEST_RNG_SEED");
@@ -760,6 +766,13 @@ long defjam_test_shot_due(void)
  * match's own events and are not part of the recorded state stream. */
 void defjam_test_generator_seed(uint32_t generator, uint32_t stack)
 {
+    /* Netplay: the match logic's generator and the general-purpose one take time-stamp values
+     * (directly, or through CLogic+0x2D874/0x2D878 after the first match). */
+    if (netplay_on() && (generator == 0x376FDCu || generator == 0x39C0E0u)) {
+        uint32_t v = netplay_seed();
+        MEM32(stack + 4) = v >> 16;
+        MEM32(stack + 8) = v & 0xFFFFu;
+    }
     if (!defjam_test_observations_enabled()) return;
     if (generator == 0x376FDCu && isolating()) {
         MEM32(stack + 4) = isolation_seed() >> 16;                  /* high, as the game splits the counter */
@@ -776,5 +789,6 @@ void defjam_test_generator_seed(uint32_t generator, uint32_t stack)
  * and round start (sub_0008B730 and sub_000891A0). An isolated run replaces the counter with the seed. */
 void defjam_test_logic_seed(uint32_t self, uint32_t stack)
 {
+    if (self == 0x003773A4u && netplay_on()) { MEM32(stack + 4) = netplay_seed(); return; }
     if (self == 0x003773A4u && isolating()) MEM32(stack + 4) = isolation_seed();
 }

@@ -615,8 +615,10 @@ static int host_main(void)
     /* Find the game folder, open a log if nothing captures the output, supply
      * the runtime's required switches and load settings.ini -- before anything
      * reads the environment. See src/hooks/pc_settings.c. */
+    { extern void netplay_prepare(void); netplay_prepare(); }   /* src/hooks/netplay.c */
     if (!pc_settings_init())
         return 1;
+    { extern int netplay_start(void); netplay_start(); }
     printf("=== Def Jam: Fight for NY - Static Recompilation ===\n");
     printf("Loading XBE...\n");
 

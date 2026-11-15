@@ -18,6 +18,7 @@
  *   - Intercept D3D/audio calls for custom rendering or sound
  */
 
+#include "hooks/netplay.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -552,6 +553,7 @@ static void ws_hud_heartbeat(void)
  * Read-only, except that RECOMP_TEST_RNG_SEED replaces the seed argument. */
 void sub_00087700_enter(void)
 {
+    netplay_fight_step();       /* src/hooks/netplay.c: no spectators, fixed general generator */
     defjam_crowd_step();
     defjam_test_step();
     s_ws_hud_live = 1;
@@ -574,7 +576,7 @@ void sub_0008BE60_enter(void)
  * through a pause that began in a live fight (issue #95); otherwise no change. */
 void sub_00079B60_enter(void) { if (s_ws_hud_live) ws_hud_heartbeat(); }
 void sub_0007A8F0_enter(void) { if (s_ws_hud_live) ws_hud_heartbeat(); }
-void sub_001A4D90_enter(void) { defjam_test_match_start(); defjam_crowd_match_start(); cheats_match_start(); song_cursor_match_start(); }
+void sub_001A4D90_enter(void) { netplay_match_start(); defjam_test_match_start(); defjam_crowd_match_start(); cheats_match_start(); song_cursor_match_start(); }
 /* Widescreen song notification (src/patches/widescreen.c, issue #118): the APT
  * movie loader (archive, name, &apt, &const), and the next step of the load,
  * which its only caller runs straight after it with the .apt data as its second
@@ -1084,6 +1086,17 @@ void sub_000D75E0_enter(void)
         s_fc_pairs = s_fc_frames = 0;
         s_fc_shift = 0;
     }
+}
+
+/* Netplay (src/hooks/netplay.c): when the gate says "run an update" it has just staged that
+ * update's controller record; netplay swaps in every player's input for it. Off unless
+ * RECOMP_NETPLAY is set, and then nothing else changes. */
+extern void sub_000D75E0_gen(void);
+void sub_000D75E0(void)
+{
+    uint32_t queue = g_ecx;
+    sub_000D75E0_gen();
+    if ((g_eax & 0xFFu) && netplay_on()) netplay_step_gate(queue);
 }
 /* The shift for a frame-clock tick due at `target`, or 0. Also writes it into
  * the title's stored delay so its next lateness correction keeps it. */
