@@ -70,6 +70,12 @@ int np_rtt_ms(void);
 /* A one-line human-readable state ("waiting for 1 player", "connected", an error). */
 const char *np_status(void);
 
+typedef struct np_stats {
+    uint64_t packets_sent, packets_received, bytes_sent, bytes_received;
+    uint32_t inputs_complete;       /* frames with every player's input here */
+} np_stats;
+void np_get_stats(np_stats *out);
+
 int np_active(void);
 void np_stop(void);
 

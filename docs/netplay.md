@@ -37,6 +37,22 @@ its lowest connected controller port (`RECOMP_NETPLAY_LOCAL_PORT` picks another)
 | `RECOMP_NETPLAY_NAME` | name shown to the others |
 | `RECOMP_NETPLAY_TRACE` | `1` logs a state hash every 60 updates (`[NETPLAY-HASH]`) |
 
+## When something goes wrong
+
+Every run keeps the game's log (`logs\run-*.log.err`) and the launcher's window (`logs\launcher-*.txt`).
+Netplay always logs who joined, every wait over half a second, a traffic summary every ten seconds
+(`[NETPLAY-STATS]`), a desync, and why a session ended.
+
+The **a prueba de errores** launchers (`Netplay - Hospedar/Unirse (a prueba de errores).bat`,
+`Jugar solo (a prueba de errores).bat`) also turn on the play-test recorder
+([playtest-recorder.md](playtest-recorder.md): crash and hang bundles with a minidump, F9 to save the
+last seconds) at 5 pictures a second, and netplay's diagnostics (`RECOMP_NETPLAY_DIAG=1`): the state
+hash every 60 updates, every player's input (`logs\netplay-inputs-*.bin`), and on a desync a dump of
+the compared state on every machine (`logs\netplay-desync-*.txt`) plus a recorder bundle.
+
+`Recoger reporte.bat` zips the newest logs, netplay files, the newest recorder session (without its
+sound), `settings.ini` and a description of the PC onto the desktop. It never includes game files or saves.
+
 ## How it works
 
 * **Input.** The title's 60 Hz worker snapshots the four controller ports into a ring of

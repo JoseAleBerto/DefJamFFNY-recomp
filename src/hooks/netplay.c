@@ -41,6 +41,11 @@
 #include "netplay.h"
 #include "netplay_net.h"
 #include "netplay_lobby.h"
+#include "recorder.h"
+#include <time.h>
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
 
 #define FRAME_QUEUE_PTR   0x003A017Cu   /* the frame queue object */
 #define STAGING           0x17D0u       /* staged record inside it */
@@ -71,6 +76,41 @@ static uint32_t s_frame;                /* updates run so far */
 static uint32_t s_fight_steps;
 static uint32_t s_seed_uses;
 static char s_banner[160];
+
+/* Diagnostics. Always: a summary line every ~10 s, every wait longer than half a second, the
+ * reason a session ended, and a play-test recorder event/bundle when the recorder is on.
+ * RECOMP_NETPLAY_DIAG=1 (the "a prueba de errores" launchers) adds: the state hash every 60
+ * updates in the log, a detailed state dump on a desync (logs/netplay-desync-*.txt, one per
+ * machine, to compare), and a log of every player's input (logs/netplay-inputs-*.bin). */
+static int s_diag;
+static int s_desync_reported;
+static uint64_t s_wait_ms_total, s_wait_ms_window, s_waits_window;
+static uint32_t s_wait_max_window;
+typedef struct { uint32_t frame; char text[1600]; } snapshot;
+static snapshot s_snaps[16];
+static FILE *s_input_log;
+static uint8_t s_last_logged[NP_MAX_PLAYERS][4u + 0x94u];
+static char s_stamp[32];
+
+static uint64_t wall_ms(void)
+{
+#if defined(_WIN32)
+    return GetTickCount64();
+#else
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000u + (uint64_t)(t.tv_nsec / 1000000);
+#endif
+}
+
+static void make_logs_dir(void)
+{
+#if defined(_WIN32)
+    CreateDirectoryA("logs", NULL);
+#else
+    mkdir("logs", 0755);
+#endif
+}
 
 int netplay_on(void)
 {
@@ -122,6 +162,12 @@ int netplay_start(void)
     cfg.delay = env_int("RECOMP_NETPLAY_DELAY", 0);
     cfg.blob_size = BLOB_BYTES;
     s_local_port = env_int("RECOMP_NETPLAY_LOCAL_PORT", -1);
+    s_diag = env_int("RECOMP_NETPLAY_DIAG", 0) == 1;
+    {
+        time_t now = time(NULL);
+        strftime(s_stamp, sizeof s_stamp, "%Y%m%d-%H%M%S", localtime(&now));
+    }
+    if (s_diag) np_say("Modo a prueba de errores: registro detallado activado (carpeta logs).");
     e = getenv("RECOMP_NETPLAY_NAME");
     snprintf(cfg.name, sizeof cfg.name, "%s", e && *e ? e : (s_mode == NP_ROLE_HOST ? "Host" : "Player"));
 #ifdef DEFJAM_VERSION
@@ -253,6 +299,95 @@ static void begin_session(void)
     np_say("%s. A jugar! (semilla %08X)", s_banner, s_session.seed);
 }
 
+/* A readable copy of what state_hash() covers, kept for the last 16 hashed updates. */
+static void take_snapshot(uint32_t hash)
+{
+    snapshot *sn = &s_snaps[(s_frame / 60u) % 16u];
+    int n, slot;
+    float f[3];
+    sn->frame = s_frame;
+    n = snprintf(sn->text, sizeof sn->text,
+                 "update %u hash %08X\nclogic_state %u phase %u match_rng %08X inc %08X util_rng %08X spectators %u\n",
+                 s_frame, hash, MEM32(CLOGIC_STATE), MEM32(G_PHASE), MEM32(G_RNG_STATE), MEM32(G_RNG_INC),
+                 MEM32(G_RNG_UTIL), MEM32(SPECTATOR_COUNT));
+    for (slot = 0; slot < 4 && n > 0 && (size_t)n < sizeof sn->text; slot++) {
+        uint32_t a = ACTORS + (uint32_t)slot * ACTOR_STRIDE;
+        memcpy(f, (const void *)XBOX_PTR(a + F_POS_X), 12);
+        n += snprintf(sn->text + n, sizeof sn->text - (size_t)n,
+                      "slot %d: used %u character %u state %u pos %.4f %.4f %.4f facing %08X health %08X ai_rng %08X\n",
+                      slot, MEM32(a + F_SLOT) != 0xFFFFFFFFu, MEM32(a + F_CHARACTER), MEM32(a + F_STATE),
+                      (double)f[0], (double)f[1], (double)f[2], MEM32(a + F_FACING), MEM32(a + F_HEALTH),
+                      MEM32(AI_GEN_STATE + (uint32_t)slot * 0x88u));
+    }
+}
+
+static void report_desync(long long frame)
+{
+    char reason[96];
+    int i;
+    s_desync_reported = 1;
+    np_say("DESYNC: las partidas se separaron en la actualizacion %lld. Guarden los logs (Recoger reporte).", frame);
+    snprintf(reason, sizeof reason, "netplay desync at update %lld", frame);
+    if (recorder_on()) recorder_mark(reason);
+    for (i = 0; i < 16; i++) {
+        if (s_snaps[i].frame == (uint32_t)frame && s_snaps[i].text[0]) {
+            char path[160];
+            FILE *f;
+            make_logs_dir();
+            snprintf(path, sizeof path, "logs/netplay-desync-%s-u%lld-p%d.txt", s_stamp, frame, s_session.player + 1);
+            f = fopen(path, "w");
+            if (f) {
+                fprintf(f, "player %d of %d, seed %08X, delay %d\n%s", s_session.player + 1, s_session.players,
+                        s_session.seed, s_session.delay, s_snaps[i].text);
+                fclose(f);
+                np_say("Estado guardado en %s", path);
+            }
+        }
+    }
+}
+
+static void log_inputs(const uint8_t *all)
+{
+    int p;
+    if (!s_input_log) {
+        char path[160];
+        make_logs_dir();
+        snprintf(path, sizeof path, "logs/netplay-inputs-%s-p%d.bin", s_stamp, s_session.player + 1);
+        s_input_log = fopen(path, "wb");
+        if (!s_input_log) { s_diag = 0; return; }
+        fwrite("DJNI", 1, 4, s_input_log);
+        memset(s_last_logged, 0xFF, sizeof s_last_logged);
+    }
+    for (p = 0; p < s_session.players; p++) {
+        const uint8_t *blob = all + (size_t)p * BLOB_BYTES;
+        if (!memcmp(blob, s_last_logged[p], BLOB_BYTES)) continue;
+        memcpy(s_last_logged[p], blob, BLOB_BYTES);
+        fwrite(&s_frame, 4, 1, s_input_log);
+        fputc(p, s_input_log);
+        fwrite(blob, 1, BLOB_BYTES, s_input_log);
+    }
+    if ((s_frame & 0xFFu) == 0) fflush(s_input_log);
+}
+
+static void periodic_report(void)
+{
+    np_stats st;
+    char fields[320];
+    np_get_stats(&st);
+    snprintf(fields, sizeof fields,
+             "\"update\":%u,\"ping_ms\":%d,\"delay\":%d,\"waits\":%llu,\"wait_ms\":%llu,\"wait_max_ms\":%u,"
+             "\"packets_out\":%llu,\"packets_in\":%llu,\"kb_out\":%llu,\"kb_in\":%llu",
+             s_frame, np_rtt_ms(), s_session.delay, (unsigned long long)s_waits_window,
+             (unsigned long long)s_wait_ms_window, s_wait_max_window,
+             (unsigned long long)st.packets_sent, (unsigned long long)st.packets_received,
+             (unsigned long long)(st.bytes_sent >> 10), (unsigned long long)(st.bytes_received >> 10));
+    fprintf(stderr, "[NETPLAY-STATS] {%s}\n", fields);
+    fflush(stderr);
+    if (recorder_on()) recorder_event("netplay", fields);
+    s_waits_window = s_wait_ms_window = 0;
+    s_wait_max_window = 0;
+}
+
 /* sub_000D75E0 said "run an update" and has just staged its record. */
 void netplay_step_gate(uint32_t queue)
 {
@@ -267,22 +402,33 @@ void netplay_step_gate(uint32_t queue)
     if (s_frame % 60u == 0u) {
         static int trace = -1;
         uint32_t h = state_hash();
-        if (trace < 0) { const char *e = getenv("RECOMP_NETPLAY_TRACE"); trace = e && *e == '1'; }
+        if (trace < 0) { const char *e = getenv("RECOMP_NETPLAY_TRACE"); trace = (e && *e == '1') || s_diag; }
         if (trace) fprintf(stderr, "[NETPLAY-HASH] %u %08X clogic=%u phase=%u rng=%08X\n", s_frame, h,
                            MEM32(CLOGIC_STATE), MEM32(G_PHASE), MEM32(G_RNG_STATE));
+        if (s_diag) take_snapshot(h);
         np_report_hash(s_frame, h);
     }
     local_input(staging, mine);
     np_submit(s_frame + (uint32_t)s_session.delay, mine);
-    while ((r = np_get(s_frame, all, 250)) == 0) {
-        if (++waited % 8 == 0) {
-            fprintf(stderr, "[NETPLAY] waiting for the other players at update %u (%s)\n", s_frame, np_status());
-            fflush(stderr);
+    {
+        uint64_t t0 = wall_ms(), dt;
+        while ((r = np_get(s_frame, all, 250)) == 0) {
+            if (++waited % 8 == 0)
+                np_say("Esperando a los demas jugadores (%d s, actualizacion %u): %s", waited / 4, s_frame, np_status());
         }
+        dt = wall_ms() - t0;
+        if (dt > 2) { s_waits_window++; s_wait_ms_window += dt; s_wait_ms_total += dt; }
+        if (dt > s_wait_max_window) s_wait_max_window = (uint32_t)dt;
+        if (dt >= 500 && r > 0)
+            fprintf(stderr, "[NETPLAY] update %u waited %llu ms for the others (ping %d ms)\n", s_frame,
+                    (unsigned long long)dt, np_rtt_ms());
     }
     if (r < 0) {
         np_say("Se acabo la sesion: %s", np_status());
         snprintf(s_banner, sizeof s_banner, "Netplay ended: %s", np_status());
+        periodic_report();
+        if (recorder_on()) { char why[300]; snprintf(why, sizeof why, "netplay ended: %s", np_status()); recorder_mark(why); }
+        if (s_input_log) { fclose(s_input_log); s_input_log = NULL; }
         fflush(stderr);
         s_dead = 1;
         return;
@@ -294,6 +440,9 @@ void netplay_step_gate(uint32_t queue)
             write_port(staging, port, none);
         }
     }
+    if (s_diag) log_inputs(all);
+    if (np_desync_frame() >= 0 && !s_desync_reported) report_desync(np_desync_frame());
+    if (s_frame % 600u == 599u) periodic_report();
     if ((s_frame & 0x3FFu) == 0 || (np_desync_frame() >= 0 && !strstr(s_banner, "DESYNC"))) {
         long long d = np_desync_frame();
         if (d >= 0) snprintf(s_banner, sizeof s_banner, "Netplay: DESYNC at update %lld", d);

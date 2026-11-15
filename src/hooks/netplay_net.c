@@ -133,6 +133,7 @@ static struct {
     uint32_t pending_hash_frame, pending_hash;  /* latest digest to piggyback */
 
     long long desync;
+    np_stats stats;
     uint64_t test_drop_state;
     unsigned test_drop_percent;
 } N;
@@ -188,7 +189,10 @@ static void send_to(const np_addr *to, const uint8_t *buf, const wbuf *b)
         N.test_drop_state = N.test_drop_state * 6364136223846793005ull + 1442695040888963407ull;
         if ((unsigned)((N.test_drop_state >> 33) % 100u) < N.test_drop_percent) return;
     }
-    sendto(N.sock, (const char *)buf, (int)(b->p - buf), 0, (const struct sockaddr *)to, sizeof *to);
+    if (sendto(N.sock, (const char *)buf, (int)(b->p - buf), 0, (const struct sockaddr *)to, sizeof *to) > 0) {
+        N.stats.packets_sent++;
+        N.stats.bytes_sent += (uint64_t)(b->p - buf);
+    }
 }
 
 /* ---- input ring --------------------------------------------------------------- */
@@ -608,6 +612,8 @@ static void pump(void)
         uint64_t now;
         int type;
         if (n <= 0) break;
+        N.stats.packets_received++;
+        N.stats.bytes_received += (uint64_t)n;
         b.p = buf; b.end = buf + n; b.bad = 0;
         if (r32(&b) != NP_MAGIC || r8(&b) != NP_VERSION) continue;
         type = (int)r8(&b);
@@ -843,6 +849,14 @@ int np_rtt_ms(void)
     } else r = N.session.rtt_ms;
     unlock();
     return r;
+}
+
+void np_get_stats(np_stats *out)
+{
+    lock();
+    *out = N.stats;
+    out->inputs_complete = N.complete;
+    unlock();
 }
 
 const char *np_status(void) { return N.status; }
