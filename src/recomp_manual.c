@@ -19,6 +19,7 @@
  */
 
 #include "hooks/netplay.h"
+#include "hooks/move_log.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -521,6 +522,7 @@ void defjam_crowd_step(void);
 void sub_001A4A30_enter(void) { defjam_test_update(); }
 void sub_001A5DD0_enter(void)
 {
+    move_log_hit(g_esp);
     if (defjam_test_observations_enabled())
         defjam_test_hit(MEM32(g_esp + 4), MEM32(g_esp + 8), MEM32(g_esp));
 }
@@ -553,6 +555,7 @@ static void ws_hud_heartbeat(void)
  * Read-only, except that RECOMP_TEST_RNG_SEED replaces the seed argument. */
 void sub_00087700_enter(void)
 {
+    move_log_step();
     netplay_fight_step();       /* src/hooks/netplay.c: no spectators, fixed general generator */
     defjam_crowd_step();
     defjam_test_step();

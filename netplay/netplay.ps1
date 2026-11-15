@@ -43,6 +43,8 @@ try {
         $env:RECOMP_RECORD = '1'
         if (-not $env:RECOMP_RECORD_FPS) { $env:RECOMP_RECORD_FPS = '5' }
         $env:RECOMP_NETPLAY_DIAG = '1'
+        # Registro de golpes: que movimiento salio y que teclas lo hicieron (logs\run-*.log.err, lineas [GOLPE]).
+        $env:RECOMP_MOVE_LOG = '1'
         Write-Host 'MODO A PRUEBA DE ERRORES: se registra todo en la carpeta logs.'
         Write-Host 'Si algo raro pasa, aprieta F9 (o manten View + clic del stick izquierdo) para guardar ese momento.'
         Write-Host 'Al terminar, abre "Recoger reporte.bat" y manda el .zip que deja en el escritorio.'
