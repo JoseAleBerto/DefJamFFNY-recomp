@@ -128,6 +128,38 @@ int main(int argc, char **argv)
         cheats_apply_settings();
         cheats_fight_step();
         printf("normal %g %g\n", getf(plain + 0x310), getf(node + 0x2E0));
+    } else if (!strcmp(argv[2], "respec")) {
+        static const uint32_t cost[10] = {5, 25, 50, 100, 225, 500, 1000, 1500, 2500, 5000};
+        uint32_t gd = 0x80001000u, p = 0x80010000u, slot_va = p + 0x177C, k;
+        MEM32(0x2FB148 + 0x18 * 4) = gd;
+        MEM32(gd + 4) = p;
+        MEM32(p + 0x5AC7C) = 0;
+        for (k = 0; k < 10; k++)
+            MEM32(0x2DBB70 + 4 * k) = cost[k];
+        MEM32(slot_va + 0x28) = 84;
+        MEM32(slot_va + 0xFC) = 25; MEM32(slot_va + 0x100) = 10; MEM32(slot_va + 0x104) = 7;
+        MEM32(slot_va + 0x108) = 25; MEM32(slot_va + 0x10C) = 50; MEM32(slot_va + 0x110) = 29;
+        cheats_on_funccall("Game.StartStoryMode( 0,0 )");
+        cheats_story_request(CHEAT_STORY_RESPEC, 0, 0, 0);
+        cheats_game_tick();
+        printf("devpts %u trained %u %u %u %u %u charisma %u\n", MEM32(slot_va + 0x28), MEM32(slot_va + 0xFC),
+               MEM32(slot_va + 0x100), MEM32(slot_va + 0x104), MEM32(slot_va + 0x108), MEM32(slot_va + 0x10C),
+               MEM32(slot_va + 0x110));
+        printf("%s\n", cheats_story_status());
+        MEM8(slot_va + 0x140) = 3; MEM8(slot_va + 0x141) = 2; MEM8(slot_va + 0x142) = 0xFF;
+        MEM32(slot_va + 0x28) = 100;
+        cheats_story_request(CHEAT_STORY_STYLES, 4, 3, 2);           /* one hybrid more, 100 points: refused */
+        cheats_game_tick();
+        printf("poor devpts %u styles %u %u %u %s\n", MEM32(slot_va + 0x28), MEM8(slot_va + 0x140),
+               MEM8(slot_va + 0x141), MEM8(slot_va + 0x142), cheats_story_status());
+        MEM32(slot_va + 0x28) = 3000;
+        cheats_story_request(CHEAT_STORY_STYLES, 4, 3, 2);           /* one hybrid more: 2,500 */
+        cheats_game_tick();
+        printf("added devpts %u styles %u %u %u\n", MEM32(slot_va + 0x28), MEM8(slot_va + 0x140),
+               MEM8(slot_va + 0x141), MEM8(slot_va + 0x142));
+        cheats_story_request(CHEAT_STORY_STYLES, 4, CHEAT_STYLE_NONE, CHEAT_STYLE_NONE);   /* both dropped */
+        cheats_game_tick();
+        printf("dropped devpts %u %s\n", MEM32(slot_va + 0x28), cheats_story_status());
     } else if (!strcmp(argv[2], "story")) {
         CheatStory s;
         uint32_t gd = 0x80001000u, p = 0x80010000u, slot_va = p + 0x177C + 0x5950;
@@ -331,6 +363,18 @@ def test_story_one_shots_styles_and_hero(cheats_tool, tmp_path):
     assert out[8] == 'hero created 0 core 56 models 1 1 shadow 1 outfit 56 name 1'
     assert out[9] == 'left 0'
     assert out[10] == 'battle created 1 core 98'   # outside Story nothing is touched
+
+
+def test_story_reset_gives_back_what_the_gym_charged(cheats_tool, tmp_path):
+    # 25 units: 5*5 + 5*25 + 5*50 + 5*100 + 5*225 = 2025; 10: 150; 7: 25 + 2*25 = 75; 50 (full): 54,525.
+    out = run(cheats_tool, tmp_path, 'respec')
+    assert out[0] == 'devpts %d trained 0 0 0 0 0 charisma 29' % (84 + 2025 + 150 + 75 + 2025 + 54525)
+    assert out[1] == 'Trained skills reset: %d development points given back.' % (2025 + 150 + 75 + 2025 + 54525)
+    assert out[2] == ('poor devpts 100 styles 3 2 255 Not applied: 1 more style cost 2500 development points '
+                      'and you have 100.')
+    assert out[3] == 'added devpts 500 styles 4 3 2'
+    assert out[4] == ('dropped devpts 5500 Fighting styles changed; 5000 development points given back for '
+                      'the styles dropped.')
 
 
 @pytest.mark.parametrize('hero', ['99', '5'])

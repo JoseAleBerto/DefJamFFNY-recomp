@@ -26,9 +26,15 @@
  *
  *   cash             slot +0x20 (GetPlayerCash sub_0004CA30 reads it, sub_00013640 spends it);
  *   development pts  slot +0x28 (GetPlayerDevPts sub_0004CA70);
+ *   trained skills   slot +0xFC .. +0x10C: the units bought at the gym for upper, lower, speed,
+ *                    toughness and health (0..50, two percent each). Unit n costs the dword at
+ *                    0x2DBB70 + 4 * (n / 5) (sub_0004EB60's purchase loop: 5, 25, 50 ... 5000); the
+ *                    reset gives back exactly what those units cost and empties them.
  *   fighting styles  slot +0x140 main, +0x141 and +0x142 hybrids (0xFF none), +0x143 the style id
  *                    plus one, then sub_00014C20 on the slot: what the gym's Learn Style purchase
- *                    (sub_0004EB60, from 0x0004ED51) does after it writes a style byte.
+ *                    (sub_0004EB60, from 0x0004ED51) does after it writes a style byte. Each hybrid style
+ *                    added costs the gym's 2,500 points (refused when they are not there) and each one
+ *                    dropped gives them back, so changing styles never makes or loses points.
  *
  * The slot is P + MEM32(P + 0x5AC7C) * 0x5950 + 0x177C, P = MEM32(game data + 4), game data =
  * MEM32(0x2FB148 + 0x18 * 4). It counts as Story from Game.StartStoryMode until the front end is back
@@ -40,7 +46,7 @@
  *   RECOMP_CHEAT_LOG=1        fighters' health, meter and Blazin' state every 60 steps, Story events
  *                             (2: every 10 steps)
  *   RECOMP_CHEAT_PROBE=1      also the Story slot's fields at each screen and the match setup's slots
- *   RECOMP_CHEAT_STORY_TEST=cash,devpts,styles=M/H1/H2   the overlay's Story buttons, pressed at the first
+ *   RECOMP_CHEAT_STORY_TEST=cash,devpts,respec,styles=M/H1/H2   the overlay's Story buttons, pressed at the first
  *                             crib screen
  */
 #define _CRT_SECURE_NO_WARNINGS
@@ -64,6 +70,10 @@
 #define S_DEVPTS       0x28u
 #define S_STYLES       0x140u
 #define S_STYLE_ID     0x143u
+#define S_TRAINED      0xFCu            /* five dwords: units bought per skill */
+#define TRAIN_COST     0x002DBB70u      /* dword per five units: the gym's price of one unit */
+#define TRAIN_MAX      50u
+#define STYLE_PRICE    2500u            /* the gym's Learn Style price (sub_0004EB60, 0x9C4) */
 #define STYLE_TABLE    0x002EBF6Fu       /* GameCoreFightStyleToID's byte table */
 
 #define ACTORS         0x003B92E0u
@@ -371,11 +381,24 @@ static void story_apply(void)
         snprintf(s_status, sizeof s_status, "Development points set to %u.", CHEAT_MAX_DEVPTS);
         break;
     case CHEAT_STORY_STYLES: {
-        uint32_t id, args = 0;
+        uint32_t id, args = 0, refund, charged;
         if (!style_ok(m, 0) || !style_ok(a, 1) || !style_ok(b, 1) || (a != CHEAT_STYLE_NONE && a == m) ||
             (b != CHEAT_STYLE_NONE && (b == m || b == a)) || (a == CHEAT_STYLE_NONE && b != CHEAT_STYLE_NONE)) {
             snprintf(s_status, sizeof s_status, "Not applied: choose different styles, the first hybrid before the second.");
             return;
+        }
+        {
+            int had = (MEM8(s + S_STYLES + 1) != CHEAT_STYLE_NONE) + (MEM8(s + S_STYLES + 2) != CHEAT_STYLE_NONE);
+            int keep = (a != CHEAT_STYLE_NONE) + (b != CHEAT_STYLE_NONE);
+            uint32_t price = keep > had ? (uint32_t)(keep - had) * STYLE_PRICE : 0;
+            if (price > MEM32(s + S_DEVPTS)) {
+                snprintf(s_status, sizeof s_status, "Not applied: %d more style%s cost %u development points and "
+                         "you have %u.", keep - had, keep - had == 1 ? "" : "s", price, MEM32(s + S_DEVPTS));
+                return;
+            }
+            MEM32(s + S_DEVPTS) -= price;
+            refund = had > keep ? (uint32_t)(had - keep) * STYLE_PRICE : 0;
+            charged = price;
         }
         MEM8(s + S_STYLES) = (uint8_t)m;
         MEM8(s + S_STYLES + 1) = (uint8_t)a;
@@ -384,7 +407,27 @@ static void story_apply(void)
                                                          b == CHEAT_STYLE_NONE ? -1 : b));
         MEM8(s + S_STYLE_ID) = (uint8_t)(id + 1);
         guest_call(sub_00014C20, s, 0, &args);
-        snprintf(s_status, sizeof s_status, "Fighting styles changed.");
+        MEM32(s + S_DEVPTS) += refund;
+        if (refund)
+            snprintf(s_status, sizeof s_status, "Fighting styles changed; %u development points given back for "
+                     "the styles dropped.", refund);
+        else if (charged)
+            snprintf(s_status, sizeof s_status, "Fighting styles changed; %u development points paid for the "
+                     "styles added.", charged);
+        else
+            snprintf(s_status, sizeof s_status, "Fighting styles changed.");
+        break;
+    }
+    case CHEAT_STORY_RESPEC: {
+        uint32_t refund = 0, k, i, n;
+        for (k = 0; k < 5; k++) {
+            n = MEM32(s + S_TRAINED + 4u * k);
+            for (i = 0; i < n && i < TRAIN_MAX; i++)
+                refund += MEM32(TRAIN_COST + 4u * (i / 5u));
+            MEM32(s + S_TRAINED + 4u * k) = 0;
+        }
+        MEM32(s + S_DEVPTS) += refund;
+        snprintf(s_status, sizeof s_status, "Trained skills reset: %u development points given back.", refund);
         break;
     }
     default:
@@ -412,6 +455,10 @@ static void story_test(const char *text)
     }
     if (strstr(v, "devpts")) {
         cheats_story_request(CHEAT_STORY_DEVPTS, 0, 0, 0);
+        story_apply();
+    }
+    if (strstr(v, "respec")) {
+        cheats_story_request(CHEAT_STORY_RESPEC, 0, 0, 0);
         story_apply();
     }
     if (strstr(v, "styles=")) {

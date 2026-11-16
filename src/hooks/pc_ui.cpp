@@ -1694,8 +1694,8 @@ static void page_debug(UiMode mode)
 
 static std::vector<pcui::Fighter> g_roster;
 static bool g_roster_read;
-static const char *k_styles[CHEAT_STYLE_COUNT] = {"Kickboxing", "Street fighting", "Martial arts", "Wrestling",
-                                                  "Submissions"};
+static const char *k_styles[CHEAT_STYLE_COUNT] = {"Street fighting", "Kickboxing", "Submissions", "Wrestling",
+                                                  "Martial arts"};   /* the game's style numbers 0..4 */
 static const char *style_name(int style)
 {
     return style >= 0 && style < CHEAT_STYLE_COUNT ? k_styles[style] : "none";
@@ -2148,7 +2148,13 @@ static void page_cheats(UiMode mode)
             pending = CHEAT_STORY_STYLES;
         ui_target("Change fighting styles");
         item_tooltip("Your fighter's main style and up to two hybrid styles, as if learned at the gym. Each style "
-                     "can be chosen once; the second hybrid needs a first.");
+                     "can be chosen once; the second hybrid needs a first. Each hybrid added costs 2,500 "
+                     "development points, as at the gym, and each one dropped gives them back.");
+        if (ImGui::Button("Reset trained skills"))
+            pending = CHEAT_STORY_RESPEC;
+        ui_target("Reset trained skills");
+        item_tooltip("Empties the five bars you trained at the gym and gives back every development point they "
+                     "cost, so you can spend them again.");
         if (pending)
             ImGui::OpenPopup("Change your Story profile?");
     }
@@ -2160,6 +2166,7 @@ static void page_cheats(UiMode mode)
                            "to go back.",
                            pending == CHEAT_STORY_CASH     ? "$999,999 cash"
                            : pending == CHEAT_STORY_DEVPTS ? "99,999 development points"
+                           : pending == CHEAT_STORY_RESPEC ? "Emptying your trained skills and giving back their points"
                                                            : "The new fighting styles");
         ImGui::PopTextWrapPos();
         if (ImGui::Button("Apply"))

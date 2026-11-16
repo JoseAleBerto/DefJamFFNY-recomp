@@ -15,7 +15,8 @@ enum { CHEAT_NOBODY, CHEAT_PLAYER1, CHEAT_PLAYERS, CHEAT_EVERYONE };
 /* [cheats] fighter_size. */
 enum { CHEAT_SIZE_NORMAL, CHEAT_SIZE_GIANT, CHEAT_SIZE_TINY };
 
-#define CHEAT_STYLE_COUNT 5     /* kickboxing, street fighting, martial arts, wrestling, submissions */
+#define CHEAT_STYLE_COUNT 5     /* street fighting, kickboxing, submissions, wrestling, martial arts: the
+                                 * game's own order (gamecore.xml's style lists, the style table) */
 #define CHEAT_STYLE_NONE  0xFF  /* an empty hybrid style byte */
 #define CHEAT_MAX_CASH    999999u
 #define CHEAT_MAX_DEVPTS  99999u
@@ -41,7 +42,7 @@ int cheats_in_story(void);
 
 /* One-shot Story changes. They are queued and applied on the game's thread, at the next update
  * of the module manager (every frame) or the next front-end call; cheats_story_status() then says what happened. */
-enum { CHEAT_STORY_CASH = 1, CHEAT_STORY_DEVPTS, CHEAT_STORY_STYLES };
+enum { CHEAT_STORY_CASH = 1, CHEAT_STORY_DEVPTS, CHEAT_STORY_STYLES, CHEAT_STORY_RESPEC };
 void cheats_story_request(int action, int main_style, int hybrid1, int hybrid2);
 const char *cheats_story_status(void);
 
